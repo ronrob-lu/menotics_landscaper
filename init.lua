@@ -42,6 +42,19 @@ local function is_dust_or_decor(nodename)
     if nodename:find("snow") and not nodename:find("snowblock") and not nodename:find("snow_block") then
         return true
     end
+    -- Ignore tree leaves, trunks, branches, and wood so we scan down to true soil
+    if minetest.get_item_group(nodename, "leaves") > 0 or
+       minetest.get_item_group(nodename, "tree") > 0 or
+       minetest.get_item_group(nodename, "wood") > 0 or
+       minetest.get_item_group(nodename, "sapling") > 0 then
+        return true
+    end
+    -- Check common names for trees/leaves in case groups are missing
+    local name_lower = nodename:lower()
+    if name_lower:find("leaves") or name_lower:find("needle") or name_lower:find("trunk") or
+       name_lower:find("tree") or name_lower:find("cactus") or name_lower:find("bush") then
+        return true
+    end
     -- Ignore typical decorative/vegetation nodes that shouldn't define the ground level
     local grp_attached = minetest.get_item_group(nodename, "attached_node")
     local grp_flora = minetest.get_item_group(nodename, "flora")
@@ -336,13 +349,13 @@ local function perform_landscaping(self, pos)
             end
         end
         
-    elseif r <= 85 then
-        -- 10% chance: Plant a tree
-        -- Check spacing to avoid dense overcrowding (radius 2 horizontally, height 8)
-        local check_radius = 2
+    elseif r <= 80 then
+        -- 5% chance: Plant a tree
+        -- Check spacing to avoid dense overcrowding (radius 5 horizontally, height 12)
+        local check_radius = 5
         local near_trees = minetest.find_nodes_in_area(
-            {x = ground_pos.x - check_radius, y = ground_pos.y, z = ground_pos.z - check_radius},
-            {x = ground_pos.x + check_radius, y = ground_pos.y + 8, z = ground_pos.z + check_radius},
+            {x = ground_pos.x - check_radius, y = ground_pos.y - 1, z = ground_pos.z - check_radius},
+            {x = ground_pos.x + check_radius, y = ground_pos.y + 12, z = ground_pos.z + check_radius},
             {"group:tree"}
         )
         
@@ -383,6 +396,136 @@ local function perform_landscaping(self, pos)
                     end
                 end
             end
+        end
+    end
+end
+
+-- Materials for lake landscaping
+local node_water = find_existing_node({"default:water_source", "mcl_core:water_source", "mapgen_water_source"}) or "mapgen_water_source"
+local node_sand = find_existing_node({"default:sand", "mcl_core:sand", "mapgen_sand"}) or "mapgen_sand"
+local node_shrub = find_existing_node({"default:dry_shrub", "mcl_core:deadbush"}) or "default:dry_shrub"
+
+local function perform_lake_landscaping(self, pos)
+    local ground_y = find_ground_level(pos, self.spawn_pos.y)
+    local ground_pos = {x = pos.x, y = ground_y, z = pos.z}
+    
+    local spawn_dist = vector.distance(
+        {x = ground_pos.x, y = self.spawn_pos.y, z = ground_pos.z},
+        {x = self.spawn_pos.x, y = self.spawn_pos.y, z = self.spawn_pos.z}
+    )
+    if spawn_dist > 50 then
+        return
+    end
+
+    local water_level = self.spawn_pos.y
+    local dx = pos.x - self.spawn_pos.x
+    local dz = pos.z - self.spawn_pos.z
+    local d = math.sqrt(dx*dx + dz*dz)
+
+    -- Neon yellow scanner laser effect
+    local function spawn_laser()
+        local steps = 15
+        for i = 0, steps do
+            local t = i / steps
+            local particle_pos = {
+                x = pos.x + (ground_pos.x - pos.x) * t,
+                y = (pos.y - 0.5) + (ground_pos.y + 1 - (pos.y - 0.5)) * t,
+                z = pos.z + (ground_pos.z - pos.z) * t
+            }
+            minetest.add_particle({
+                pos = particle_pos,
+                velocity = {x = 0, y = 0, z = 0},
+                acceleration = {x = 0, y = 0, z = 0},
+                expirationtime = 0.4,
+                size = 1.2,
+                collisiondetection = false,
+                texture = "menotics_landscaper_particle.png^[colorize:#ffff00:255",
+                glow = 14,
+            })
+        end
+    end
+
+    if d < 18 then
+        -- 1. Lake Center: excavate basin, fill with water
+        local target_y = water_level - 1
+        if d < 10 then
+            target_y = water_level - 3
+        elseif d < 15 then
+            target_y = water_level - 2
+        end
+        
+        spawn_laser()
+        
+        -- Clear air above water level
+        for y = water_level + 1, math.max(ground_y, water_level + 1) do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = "air"})
+        end
+        -- Fill water
+        for y = target_y + 1, water_level do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = node_water})
+        end
+        -- Place sand bed
+        for y = target_y - 1, target_y do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = node_sand})
+        end
+        
+        minetest.sound_play("default_place_node", {pos = ground_pos, gain = 0.1, max_hear_distance = 12}, true)
+        
+    elseif d < 25 then
+        -- 2. Beach Zone: flat sand at water level
+        local target_y = water_level
+        if d >= 22 then
+            target_y = water_level + 1
+        end
+        
+        spawn_laser()
+        
+        -- Clear space above beach level
+        for y = target_y + 1, math.max(ground_y, target_y + 1) do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = "air"})
+        end
+        -- Lay beach sand layers
+        for y = target_y - 2, target_y do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = node_sand})
+        end
+        
+        minetest.sound_play("default_place_node", {pos = ground_pos, gain = 0.15, max_hear_distance = 12}, true)
+        
+    elseif d < 42 then
+        -- 3. Dune Zone: wavy sand dunes rising above water level
+        local dune_height = math.sin(d * 0.7) * 2.0 + 2.0
+        local target_y = math.floor(water_level + dune_height)
+        
+        spawn_laser()
+        
+        if ground_y > target_y then
+            for y = target_y + 1, ground_y do
+                minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = "air"})
+            end
+        elseif ground_y < target_y then
+            for y = ground_y + 1, target_y do
+                minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = node_sand})
+            end
+        end
+        -- Build sand core
+        for y = target_y - 2, target_y do
+            minetest.set_node({x = pos.x, y = y, z = pos.z}, {name = node_sand})
+        end
+        -- Rare chance to plant beach grass
+        if math.random(1, 100) <= 8 then
+            local deco_pos = {x = pos.x, y = target_y + 1, z = pos.z}
+            local node_above = minetest.get_node_or_nil(deco_pos)
+            if node_above and node_above.name == "air" then
+                minetest.set_node(deco_pos, {name = node_shrub})
+            end
+        end
+        
+        minetest.sound_play("default_place_node", {pos = ground_pos, gain = 0.2, max_hear_distance = 15}, true)
+        
+    elseif d <= 50 then
+        -- 4. Outer transition zone: patch sand
+        if math.random(1, 100) <= 40 then
+            minetest.set_node({x = pos.x, y = ground_y, z = pos.z}, {name = node_sand})
         end
     end
 end
@@ -534,6 +677,153 @@ minetest.register_entity("menotics_landscaper:drone", {
     end,
 })
 
+-- Register Lake Drone Entity
+minetest.register_entity("menotics_landscaper:lake_drone", {
+    initial_properties = {
+        physical = false,
+        collisionbox = {-0.5, -0.5, -0.5, 0.5, 0.5, 0.5},
+        visual = "cube",
+        textures = {
+            "menotics_landscaper_lake_drone_top.png",
+            "menotics_landscaper_lake_drone_bottom.png",
+            "menotics_landscaper_lake_drone_side.png",
+            "menotics_landscaper_lake_drone_side.png",
+            "menotics_landscaper_lake_drone_side.png",
+            "menotics_landscaper_lake_drone_front.png",
+        },
+        static_save = true,
+    },
+    
+    timer = 0,
+    thrust_timer = 0,
+    bob_timer = 0,
+    spawn_pos = nil,
+    target_pos = nil,
+
+    on_activate = function(self, staticdata, dtime_s)
+        self.object:set_armor_groups({fleshy = 100})
+        
+        -- Restore state
+        local data = minetest.deserialize(staticdata)
+        if data then
+            self.spawn_pos = data.spawn_pos
+            self.target_pos = data.target_pos
+        end
+        
+        local pos = self.object:get_pos()
+        if pos then
+            if not self.spawn_pos then
+                self.spawn_pos = vector.new(pos)
+            end
+            if not self.target_pos then
+                self.target_pos = get_new_target(self)
+            end
+        end
+    end,
+
+    get_staticdata = function(self)
+        local data = {
+            spawn_pos = self.spawn_pos,
+            target_pos = self.target_pos,
+        }
+        return minetest.serialize(data)
+    end,
+
+    on_step = function(self, dtime)
+        self.timer = (self.timer or 0) + dtime
+        self.thrust_timer = (self.thrust_timer or 0) + dtime
+        self.bob_timer = (self.bob_timer or 0) + dtime
+
+        local pos = self.object:get_pos()
+        if not pos then return end
+
+        if not self.spawn_pos then
+            self.spawn_pos = vector.new(pos)
+        end
+        if not self.target_pos then
+            self.target_pos = get_new_target(self)
+        end
+
+        -- Spawning thrust flame particles (every 0.1s)
+        if self.thrust_timer >= 0.1 then
+            self.thrust_timer = 0
+            minetest.add_particle({
+                pos = {x = pos.x, y = pos.y - 0.5, z = pos.z},
+                velocity = {
+                    x = math.random(-10, 10) * 0.05,
+                    y = -1.2 - math.random() * 0.5,
+                    z = math.random(-10, 10) * 0.05
+                },
+                acceleration = {x = 0, y = -0.2, z = 0},
+                expirationtime = 0.5 + math.random() * 0.3,
+                size = 1.0 + math.random() * 1.5,
+                collisiondetection = true,
+                vertical = false,
+                texture = "menotics_landscaper_particle.png^[colorize:#ffd21e:200",
+                glow = 12,
+            })
+        end
+
+        local dist = vector.distance(pos, self.target_pos)
+        if dist < 2.0 or dist > 100 then
+            self.target_pos = get_new_target(self)
+        else
+            -- Smooth gliding towards target
+            local speed = 2.0
+            local dir = vector.direction(pos, self.target_pos)
+            
+            -- Sinusoidal hover bobbing
+            local bob = math.sin(self.bob_timer * 3.0) * 0.15
+            local velocity = vector.multiply(dir, speed)
+            velocity.y = velocity.y + bob
+            
+            self.object:set_velocity(velocity)
+            
+            -- Rotate facing direction
+            local yaw = math.atan2(-dir.x, dir.z)
+            self.object:set_yaw(yaw)
+        end
+
+        -- Trigger landscaping every 3.0s
+        if self.timer >= 3.0 then
+            self.timer = 0
+            perform_lake_landscaping(self, pos)
+        end
+    end,
+
+    on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir)
+        -- Hitting the drone destroys it and drops it back as an item
+        if puncher and puncher:is_player() then
+            local pos = self.object:get_pos()
+            if pos then
+                minetest.add_item(pos, "menotics_landscaper:lake_drone_spawner")
+                
+                -- Spawn breakdown explosion particles
+                for _ = 1, 15 do
+                    minetest.add_particle({
+                        pos = {
+                            x = pos.x + math.random(-5, 5)*0.1,
+                            y = pos.y + math.random(-5, 5)*0.1,
+                            z = pos.z + math.random(-5, 5)*0.1
+                        },
+                        velocity = {
+                            x = math.random(-15, 15)*0.1,
+                            y = math.random(-5, 15)*0.1,
+                            z = math.random(-15, 15)*0.1
+                        },
+                        expirationtime = 0.6,
+                        size = 1.0 + math.random()*1.5,
+                        texture = "menotics_landscaper_particle.png^[colorize:#dca50a:200",
+                        glow = 10,
+                    })
+                end
+                minetest.sound_play("default_dig_node", {pos = pos, gain = 0.5}, true)
+            end
+            self.object:remove()
+        end
+    end,
+})
+
 -- Register Spawner Node (the placed block that deploys the drone)
 minetest.register_node("menotics_landscaper:drone_spawner", {
     description = S("Menotics Landscaper Drone"),
@@ -549,6 +839,26 @@ minetest.register_node("menotics_landscaper:drone_spawner", {
     on_construct = function(pos)
         local spawn_pos = {x = pos.x, y = pos.y + 0.5, z = pos.z}
         local obj = minetest.add_entity(spawn_pos, "menotics_landscaper:drone")
+        if obj then
+            minetest.remove_node(pos)
+        end
+    end,
+})
+
+minetest.register_node("menotics_landscaper:lake_drone_spawner", {
+    description = S("Menotics Lake Landscaper Drone"),
+    tiles = {
+        "menotics_landscaper_lake_drone_top.png",
+        "menotics_landscaper_lake_drone_bottom.png",
+        "menotics_landscaper_lake_drone_side.png",
+        "menotics_landscaper_lake_drone_side.png",
+        "menotics_landscaper_lake_drone_side.png",
+        "menotics_landscaper_lake_drone_front.png"
+    },
+    groups = {cracky = 3, oddy = 3},
+    on_construct = function(pos)
+        local spawn_pos = {x = pos.x, y = pos.y + 0.5, z = pos.z}
+        local obj = minetest.add_entity(spawn_pos, "menotics_landscaper:lake_drone")
         if obj then
             minetest.remove_node(pos)
         end
@@ -573,6 +883,7 @@ end
 local item_iron = find_existing_item({"default:steel_ingot", "mcl_core:iron_ingot"})
 local item_gold = find_existing_item({"default:copper_ingot", "mcl_core:gold_ingot"})
 local item_mese = find_existing_item({"default:mese_crystal", "mcl_core:diamond"})
+local item_bucket = find_existing_item({"bucket:bucket_water", "mcl_buckets:bucket_water", "default:water_source"})
 
 if item_iron and item_gold and item_mese then
     minetest.register_craft({
@@ -580,6 +891,17 @@ if item_iron and item_gold and item_mese then
         recipe = {
             {item_iron, item_mese, item_iron},
             {item_iron, item_gold, item_iron},
+            {item_iron, item_iron, item_iron},
+        }
+    })
+end
+
+if item_iron and item_mese and item_bucket then
+    minetest.register_craft({
+        output = "menotics_landscaper:lake_drone_spawner",
+        recipe = {
+            {item_iron, item_mese, item_iron},
+            {item_iron, item_bucket, item_iron},
             {item_iron, item_iron, item_iron},
         }
     })
@@ -594,7 +916,7 @@ minetest.register_chatcommand("clear_drones", {
         local count = 0
         local entities_table = minetest.luaentities or (core and core.luaentities) or {}
         for _, entity in pairs(entities_table) do
-            if entity.name == "menotics_landscaper:drone" then
+            if entity.name == "menotics_landscaper:drone" or entity.name == "menotics_landscaper:lake_drone" then
                 if entity.object then
                     entity.object:remove()
                     count = count + 1
